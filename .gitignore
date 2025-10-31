@@ -19,3 +19,4 @@
 /data/preprocessed
 /data/lists/*
 /data/folds/matching_fold/*/*
+/model/ml_weight/*

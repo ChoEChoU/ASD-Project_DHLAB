@@ -4,7 +4,7 @@ import argparse
 from glob import glob
 import pandas as pd
 
-SPLITS = ["train", "valid", "test"]
+SPLITS = ["test"]
 
 def parse_exp_folder(folder_name: str):
     """

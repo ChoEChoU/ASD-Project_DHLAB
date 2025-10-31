@@ -92,7 +92,8 @@ class Trainer():
         self.net.eval()
 
         with torch.no_grad():
-            for data_loader in [self.train_loader, self.valid_loader, self.test_loader]:
+            # for data_loader in [self.train_loader, self.valid_loader, self.test_loader]:
+            for data_loader in [self.test_loader]:
                 model_filename = "best_model.pkl"
                 self.config.model_file = os.path.join(self.config.model_path, model_filename)
                 cls_gt_path = os.path.join(self.config.model_path, 'cls_gt.npy')

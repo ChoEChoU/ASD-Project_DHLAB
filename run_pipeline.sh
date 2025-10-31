@@ -16,6 +16,51 @@ set -Eeuo pipefail
 # -----------------------------
 # ✅ 0) 환경 설정
 # -----------------------------
+echo ""
+echo "========================================"
+echo "🔧 [0] Installing environment dependencies..."
+echo "========================================"
+
+# 0-1) Conda 환경 생성 및 활성화
+if conda info --envs | grep -q "asd_env"; then
+  echo "✅ Conda env 'asd_env' already exists. Skipping creation."
+else
+  echo "📦 Creating conda environment: asd_env (Python 3.8.20)"
+  conda create -n asd_env python==3.8.20 -y
+fi
+
+# shell session을 conda 환경 안에서 실행
+eval "$(conda shell.bash hook)"
+conda activate asd_env
+
+echo "🐍 Using Python: $(python --version)"
+echo "📦 Using Conda Env: $(conda env list | grep asd_env)"
+
+# CUDA 11.3 기반 PyTorch
+pip install torch==1.12.1+cu113 torchvision==0.13.1+cu113 torchaudio==0.12.1 \
+  --extra-index-url https://download.pytorch.org/whl/cu113
+
+# mmcv-full 설치 (torch1.12.1 + cu113 조합)
+pip install -U openmim
+mim install mmcv==2.0.0
+mim install mmengine==0.10.7
+mim install mmdet==3.0.0
+mim install mmpose==1.3.2
+
+# requirements.txt 설치
+pip install -r requirements.txt
+
+# mmaction2 editable 설치
+cd model/mmaction2
+pip install -v -e .
+cd ../../
+
+echo ""
+echo "✅ Environment setup complete!"
+echo "----------------------------------------"
+python -c "import torch, mmcv; print('torch:', torch.__version__, '| mmcv:', mmcv.__version__)"
+echo "----------------------------------------"
+
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
 LOG_DIR="$ROOT/logs"
@@ -105,13 +150,13 @@ echo "✅ Preprocessing completed (Steps 1~10)."
 # 🧩 [11~15단계] CASE 모델 학습 및 결과 요약
 # ============================================================
 
-# 11) CASE 모델 학습 (matching dataset)
-step 11 "CASE model training"
-bash model/CASE/11_run_2025_aiai_AF_group_match_E_cell_all_matching.sh
+# # 11) CASE 모델 학습 (matching dataset)
+# step 11 "CASE model training"
+# bash model/CASE/11_run_2025_aiai_AF_group_match_E_cell_all_matching.sh
 
-# 12) CASE 모델 inference-only 실행 (테스트셋)
-step 12 "CASE inference_only"
-bash model/CASE/12_run_2025_aiai_AF_group_match_E_cell_all_test_matching.sh
+# # 12) CASE 모델 inference-only 실행 (테스트셋)
+# step 12 "CASE inference_only"
+# bash model/CASE/12_run_2025_aiai_AF_group_match_E_cell_all_test_matching.sh
 
 # 13) outputs/ 아래에서 CSV 파일만 추출 (폴더 구조 유지)
 #     출력: outputs_csv/
@@ -161,11 +206,23 @@ python3 data_preprocess/17_merge_demo_with_results.py \
   --output_dir ./data/final_data \
   --key patient_id
 
-# 18) 최종 머신러닝 모델 학습 (GridSearch/RFE/F1/AUC 조합)
-#     실행: model/run.sh
-#     출력: ./model_results_matching/
-step 18 "Run final matching ML model (RFE/Grid/Metric/Impute sweep)"
-bash model/run.sh
+# # 18-A) 최종 머신러닝 모델 학습 (GridSearch/RFE/F1/AUC 조합)
+# #     실행: model/run.sh
+# #     출력: ./model_results_matching/
+# step 18 "Run final matching ML model (RFE/Grid/Metric/Impute sweep)"
+# bash model/run.sh
+
+# 18-B) (기본) 학습된 아티팩트로 추론만 수행
+step 18 "Run final ML model inference (using pre-trained artifacts)"
+python3 model/18_inference.py \
+  --model_dir ./model/ml_weight \
+  --group_name Matched_E_Cell_1017 \
+  --model_name GradientBoosting \
+  --data_dir ./data/final_data \
+  --folds 5 \
+  --key patient_id \
+  --label_col group \
+  --output_dir ./Prediction_Results
 
 echo ""
 echo "🎯 ✅ Pipeline fully completed (Steps 1–18)"
