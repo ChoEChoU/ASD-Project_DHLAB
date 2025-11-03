@@ -17,7 +17,13 @@ git clone https://github.com/ChoEChoU/ASD-Project_DHLAB.git
 cd ASD-Project_DHLAB
 ```
 
-### 2. Run the full pipeline (자동 환경 설치 포함)
+### 2. 가중치 파일 다운로드
+feature 추출을 위해서 사전에 가중치 파일을 다운로드 받아야 합니다.
+https://drive.google.com/drive/folders/1Q26NkuKZ_ITDse4bg0L_J2X7hgJiqjOC?usp=drive_link
+
+"model/mmaction2/ckpts" 다운받은 가중치 파일을 이 위치에 저장해야합니다.
+
+### 3. Run the full pipeline (자동 환경 설치 포함)
 `run_pipeline.sh` 스크립트는 실행 시 다음을 자동으로 처리합니다:
 
 - Conda 환경(`asd_env`, Python 3.8.20) 생성 및 활성화  
