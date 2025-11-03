@@ -21,7 +21,7 @@ cd ASD-Project_DHLAB
 feature 추출을 위해서 사전에 가중치 파일을 다운로드 받아야 합니다.
 https://drive.google.com/drive/folders/1Q26NkuKZ_ITDse4bg0L_J2X7hgJiqjOC?usp=drive_link
 
-"model/mmaction2/ckpts" 다운받은 가중치 파일을 이 위치에 저장해야합니다.
+"model/mmaction2/ckpts/" 다운받은 가중치 파일을 ckpts 폴더 안에 저장해야합니다.
 
 ### 3. Run the full pipeline (자동 환경 설치 포함)
 `run_pipeline.sh` 스크립트는 실행 시 다음을 자동으로 처리합니다:
