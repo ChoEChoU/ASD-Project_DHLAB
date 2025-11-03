@@ -156,11 +156,12 @@ bash run_pipeline.sh
 
 ## Output Example
 
-| fold | patient_id | pred_numeric | pred_label | prob_others | prob_normal | ground_truth |
+```| fold | patient_id | pred_numeric | pred_label | prob_others | prob_normal | ground_truth |
 |------|-------------|-------------|--------------|--------------|----------------|
 | 0 | patient_1 | 0 | Normal | 0.18 | 0.82 | Normal |
 | 0 | patient_2 | 1 | Others | 0.75 | 0.25 | Others |
 | 1 | patient_3 | 0 | Normal | 0.32 | 0.68 | Normal |
+```
 
 ---
 
