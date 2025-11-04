@@ -76,20 +76,23 @@ def segment_iou(target_segment, candidate_segments):
     return tIoU
 
 
+# === 1) 안전한 blocked_videos 가져오기 ===
 def get_blocked_videos(api=API):
-    api_url = '{}?action=get_blocked'.format(api)
-    req = urllib.Request(api_url)
-    response = urllib.urlopen(req)
-    return json.loads(response.read())
+    try:
+        api_url = '{}?action=get_blocked'.format(api)
+        req = urllib.Request(api_url)
+        response = urllib.urlopen(req)
+        out = json.loads(response.read())
+        # 보수적으로 set으로 변환
+        return set(out) if isinstance(out, list) else set()
+    except Exception:
+        # 네트워크 에러 등은 그냥 차단 목록 비우고 진행
+        return set()
 
 
-def str2ind(categoryname, classlist):
-    return [i for i in range(len(classlist)) if categoryname == classlist[i]][0]
-
-
+# === 2) ANETEval.__init__ 일부 교체 (핵심 로직은 동일, 보강만) ===
 class ANETEval(object):
     GROUND_TRUTH_FIELDS = ['database', 'taxonomy', 'version']
-    # PREDICTION_FIELDS = ['results', 'version', 'external_data']
     PREDICTION_FIELDS = ['results', 'version']
 
     def __init__(self, ground_truth_filename=None, prediction_filename=None, proposal_filename=None,
@@ -100,13 +103,15 @@ class ANETEval(object):
                  subset='validation', verbose=False,
                  check_status=True,
                  mode=('proposal', 'prediction')):
+
         if not ground_truth_filename:
             raise IOError('Please input a valid ground truth file.')
         if not prediction_filename and 'prediction' in mode:
             raise IOError('Please input a valid prediction file.')
         if not proposal_filename and 'proposal' in mode:
             raise IOError('Please input a valid proposal file.')
-        self.subset = subset
+
+        self.subset = subset  # 'validation' | 'test' | 'train' | 'all'
         self.tiou_thresholds = tiou_thresholds
         self.verbose = verbose
         self.gt_fields = ground_truth_fields
@@ -115,25 +120,30 @@ class ANETEval(object):
         self.check_status = check_status
         self.mode = mode
         self.max_avg_nr_proposals = max_avg_nr_proposals
-        # Retrieve blocked videos from server.
-        if self.check_status:
-            self.blocked_videos = get_blocked_videos()
-        else:
-            self.blocked_videos = list()
-        # Import ground truth and predictions.
-        self.ground_truth, self.activity_index = self._import_ground_truth(
-            ground_truth_filename)
-        # self.ground_truth, self.activity_index = self._import_ground_truth(
-        #     '/data/liuqy/Thumos14reduced-CO2-Net/Thumos14reduced-Annotations')
-        # print(self.activity_index)
-        # exit()
+
+        # 차단 목록
+        self.blocked_videos = get_blocked_videos() if self.check_status else set()
+
+        # GT 로딩
+        self.ground_truth, self.activity_index = self._import_ground_truth(ground_truth_filename)
+
+        # (선택) proposal
         if 'proposal' in mode:
             self.proposal = self._import_proposal(proposal_filename)
+
+        # Pred 로딩 전에 activity_index 보장
+        # 예: subset 필터로 GT가 비어버린 케이스를 커버
         if 'prediction' in mode:
+            # prediction 파일을 먼저 열어(한 번) 인덱스 생성에 활용
+            with open(prediction_filename, 'r') as fobj:
+                _pred_for_index = json.load(fobj)
+            self._ensure_activity_index(gt_data=self._gt_raw_data, pred_data=_pred_for_index)
+
+            # 실제 Prediction DataFrame 생성
             self.prediction = self._import_prediction(prediction_filename)
 
         if self.verbose:
-            print('[INIT] Loaded annotations from {} subset.'.format(subset))
+            print('[INIT] Loaded annotations from {} subset.'.format(self.subset))
             nr_gt = len(self.ground_truth)
             print('\tNumber of ground truth instances: {}'.format(nr_gt))
             if 'prediction' in mode:
@@ -141,157 +151,169 @@ class ANETEval(object):
                 print('\tNumber of predictions: {}'.format(nr_pred))
             if 'proposal' in mode:
                 nr_pred = len(self.proposal)
-                print('\tNumber of predictions: {}'.format(nr_pred))
+                print('\tNumber of proposals: {}'.format(nr_pred))
             print('\tFixed threshold for tiou score: {}'.format(self.tiou_thresholds))
 
+
+    # === 3) GT 로더 보강: subset='all' 지원 + 소문자 정규화 + fallback ===
     def _import_ground_truth(self, ground_truth_filename):
-        """Reads ground truth file, checks if it is well formatted, and returns
-           the ground truth instances and the activity classes.
-        Parameters
-        ----------
-        ground_truth_filename : str
-            Full path to the ground truth json file.
-        Outputs
-        -------
-        ground_truth : df
-            Data frame containing the ground truth instances.
-        activity_index : dict
-            Dictionary containing class index.
+        """
+        Returns:
+            ground_truth: DataFrame
+            activity_index: dict {class_name_lower: idx}
         """
         with open(ground_truth_filename, 'r') as fobj:
             data = json.load(fobj)
-        # Checking format
-        # if not all([field in data.keys() for field in self.gt_fields]):
-        #     raise IOError('Please input a valid ground truth file.')
+        # raw 보관(인덱스 자동 구성에 사용)
+        self._gt_raw_data = data
 
-        # Read ground truth data.
         activity_index, cidx = {}, 0
         video_lst, t_start_lst, t_end_lst, label_lst = [], [], [], []
+
+        # subset 필터링: 'all'이면 전체, 아니면 일치하는 것만
+        want_all = (str(self.subset).lower() == 'all')
+        picked = 0
+
         for videoid, v in data['database'].items():
-            if self.subset != v['subset']:
+            if not want_all and ('subset' in v) and (v['subset'] != self.subset):
                 continue
             if videoid in self.blocked_videos:
                 continue
-            for ann in v['annotations']:
-                if ann['label'] not in activity_index:
-                    activity_index[ann['label']] = cidx
+            for ann in v.get('annotations', []):
+                lab = str(ann['label']).lower()
+                if lab not in activity_index:
+                    activity_index[lab] = cidx
                     cidx += 1
                 video_lst.append(videoid)
                 t_start_lst.append(float(ann['segment'][0]))
                 t_end_lst.append(float(ann['segment'][1]))
-                label_lst.append(activity_index[ann['label']])
+                label_lst.append(activity_index[lab])
+                picked += 1
 
-        ground_truth = pd.DataFrame({'video-id': video_lst,
-                                     't-start': t_start_lst,
-                                     't-end': t_end_lst,
-                                     'label': label_lst})
+        # 만약 선택된 항목이 0개면(=subset 불일치 가능성) 전체 포함으로 다시 시도
+        if picked == 0 and not want_all:
+            if self.verbose:
+                print(f"[WARN] No GT matched subset='{self.subset}'. Falling back to 'all'.")
+            for videoid, v in data['database'].items():
+                if videoid in self.blocked_videos:
+                    continue
+                for ann in v.get('annotations', []):
+                    lab = str(ann['label']).lower()
+                    if lab not in activity_index:
+                        activity_index[lab] = cidx
+                        cidx += 1
+                    video_lst.append(videoid)
+                    t_start_lst.append(float(ann['segment'][0]))
+                    t_end_lst.append(float(ann['segment'][1]))
+                    label_lst.append(activity_index[lab])
+
+        ground_truth = pd.DataFrame({
+            'video-id': video_lst,
+            't-start': t_start_lst,
+            't-end': t_end_lst,
+            'label': label_lst
+        })
         return ground_truth, activity_index
 
-    # def _import_ground_truth(self, annotation_path):
-    #     gtsegments = np.load(annotation_path + "/segments.npy", allow_pickle=True)
-    #     gtlabels = np.load(annotation_path + "/labels.npy", allow_pickle=True)
-    #     videoname = np.load(annotation_path + "/videoname.npy", allow_pickle=True)
-    #     videoname = np.array([i.decode("utf8") for i in videoname])
-    #     subset = np.load(annotation_path + "/subset.npy", allow_pickle=True)
-    #     subset = np.array([s.decode("utf-8") for s in subset])
-    #     classlist = np.load(annotation_path + "/classlist.npy", allow_pickle=True)
-    #     classlist = np.array([c.decode("utf-8") for c in classlist])
-    #     duration = np.load(annotation_path + "/duration.npy", allow_pickle=True)
-    #     ambilist = annotation_path + "/Ambiguous_test.txt"
-    #
-    #     try:
-    #         ambilist = list(open(ambilist, "r"))
-    #         ambilist = [a.strip("\n").split(" ") for a in ambilist]
-    #     except:
-    #         ambilist = []
-    #
-    #     self.ambilist = ambilist
-    #     self.classlist = classlist
-    #
-    #     subset_ind = (subset == self.subset)
-    #     gtsegments = gtsegments[subset_ind]
-    #     gtlabels = gtlabels[subset_ind]
-    #     videoname = videoname[subset_ind]
-    #     duration = duration[subset_ind]
-    #
-    #     self.idx_to_take = [i for i, s in enumerate(gtsegments)
-    #                         if len(s) > 0]
-    #
-    #     gtsegments = gtsegments[self.idx_to_take]
-    #     gtlabels = gtlabels[self.idx_to_take]
-    #     videoname = videoname[self.idx_to_take]
-    #
-    #     self.videoname = videoname
-    #     # which categories have temporal labels ?
-    #     templabelcategories = sorted(list(set([l for gtl in gtlabels for l in gtl])))
-    #
-    #     # # the number index for those categories.
-    #     templabelidx = []
-    #     for t in templabelcategories:
-    #         templabelidx.append(str2ind(t, classlist))
-    #
-    #     self.templabelidx = templabelidx
-    #
-    #     video_lst, t_start_lst, t_end_lst, label_lst = [], [], [], []
-    #
-    #     for i in range(len(gtsegments)):
-    #         for j in range(len(gtsegments[i])):
-    #             video_lst.append(str(videoname[i]))
-    #             # t_start_lst.append(round(gtsegments[i][j][0] * 25 / 16))
-    #             # t_end_lst.append(round(gtsegments[i][j][1] * 25 / 16))
-    #             t_start_lst.append(gtsegments[i][j][0])
-    #             t_end_lst.append(gtsegments[i][j][1])
-    #             label_lst.append(str2ind(gtlabels[i][j], self.classlist))
-    #     ground_truth = pd.DataFrame(
-    #         {
-    #             "video-id": video_lst,
-    #             "t-start": t_start_lst,
-    #             "t-end": t_end_lst,
-    #             "label": label_lst,
-    #         }
-    #     )
-    #     ground_truth = ground_truth
-    #     activity_index = {templabelcategories[i]: templabelidx[i] for i in range(len(templabelidx))}
-    #     return ground_truth, activity_index
 
+    # === 4) 인덱스 보장 헬퍼: GT→Pred 순으로 자동 생성 ===
+    def _ensure_activity_index(self, gt_data=None, pred_data=None):
+        """
+        Ensure self.activity_index is a non-empty mapping {class_name(lower): idx}.
+        Priority:
+          1) existing non-empty self.activity_index
+          2) labels scanned from GT
+          3) labels scanned from predictions
+        """
+        # 이미 있고 비어있지 않으면 소문자화만 보장
+        if isinstance(getattr(self, 'activity_index', None), dict) and len(self.activity_index) > 0:
+            self.activity_index = {str(k).lower(): v for k, v in self.activity_index.items()}
+            return
+
+        labels = set()
+
+        # 2) GT 스캔
+        if isinstance(gt_data, dict) and 'database' in gt_data:
+            for _, v in gt_data['database'].items():
+                for ann in v.get('annotations', []):
+                    labels.add(str(ann.get('label')).lower())
+
+        # 3) Pred 스캔 (GT에서 못 얻었을 때)
+        if not labels and isinstance(pred_data, dict) and 'results' in pred_data:
+            for _, arr in pred_data['results'].items():
+                if isinstance(arr, list):
+                    for obj in arr:
+                        if isinstance(obj, dict) and 'label' in obj:
+                            labels.add(str(obj['label']).lower())
+
+        if not labels:
+            raise RuntimeError("Could not build activity_index: no labels in GT or predictions.")
+
+        classes = sorted(labels)
+        self.activity_index = {c: i for i, c in enumerate(classes)}
+
+
+    # === 5) Prediction 로더 보강: 라벨 정규화 + 안전 매핑 ===
     def _import_prediction(self, prediction_filename):
-        """Reads prediction file, checks if it is well formatted, and returns
-           the prediction instances.
-        Parameters
-        ----------
-        prediction_filename : str
-            Full path to the prediction json file.
-        Outputs
-        -------
-        prediction : df
-            Data frame containing the prediction instances.
+        """
+        Returns:
+            prediction: DataFrame with ['video-id','t-start','t-end','label','score']
         """
         with open(prediction_filename, 'r') as fobj:
             data = json.load(fobj)
-        # Checking format...
+
         if not all([field in data.keys() for field in self.pred_fields]):
             raise IOError('Please input a valid prediction file.')
 
-        # Read predictions.
+        # 인덱스 보장 (혹시라도 비어있다면 pred_data만으로라도 구성)
+        if not getattr(self, "activity_index", None):
+            self._ensure_activity_index(gt_data=getattr(self, "_gt_raw_data", None), pred_data=data)
+
+        # 키 정규화
+        self.activity_index = {str(k).lower(): v for k, v in self.activity_index.items()}
+
         video_lst, t_start_lst, t_end_lst = [], [], []
         label_lst, score_lst = [], []
+
+        blocked = getattr(self, "blocked_videos", set())
+
         for videoid, v in data['results'].items():
-            if videoid in self.blocked_videos:
-                print(videoid)
+            if videoid in blocked:
                 continue
             for result in v:
-                
-                label = self.activity_index[result['label']]
+                # --- 라벨 정규화 ---
+                raw_label = result.get('label', None)
+                if isinstance(raw_label, (int, float)):
+                    label_key = str(int(raw_label))
+                else:
+                    label_key = str(raw_label).lower() if raw_label is not None else None
+
+                if label_key in self.activity_index:
+                    label = self.activity_index[label_key]
+                elif isinstance(raw_label, (int, float)) and int(raw_label) in self.activity_index.values():
+                    label = int(raw_label)  # 이미 인덱스가 들어온 케이스
+                else:
+                    raise KeyError(
+                        f"Label '{raw_label}' not found in activity_index keys: {list(self.activity_index.keys())}"
+                    )
+
+                # --- 나머지 필드 ---
+                seg = result.get('segment', [0.0, 0.0])
+                score = result.get('score', 1.0)
+
                 video_lst.append(videoid)
-                t_start_lst.append(float(result['segment'][0]))
-                t_end_lst.append(float(result['segment'][1]))
+                t_start_lst.append(float(seg[0]))
+                t_end_lst.append(float(seg[1]))
                 label_lst.append(label)
-                score_lst.append(result['score'])
-        prediction = pd.DataFrame({'video-id': video_lst,
-                                   't-start': t_start_lst,
-                                   't-end': t_end_lst,
-                                   'label': label_lst,
-                                   'score': score_lst})
+                score_lst.append(float(score))
+
+        prediction = pd.DataFrame({
+            'video-id': video_lst,
+            't-start': t_start_lst,
+            't-end': t_end_lst,
+            'label': label_lst,
+            'score': score_lst
+        })
         return prediction
 
     def _import_proposal(self, proposal_filename):
@@ -501,8 +523,8 @@ def compute_average_precision_detection(ground_truth, prediction, tiou_threshold
             if fp[tidx, idx] == 0 and tp[tidx, idx] == 0:
                 fp[tidx, idx] = 1
 
-    tp_cumsum = np.cumsum(tp, axis=1).astype(np.float)
-    fp_cumsum = np.cumsum(fp, axis=1).astype(np.float)
+    tp_cumsum = np.cumsum(tp, axis=1).astype(float)
+    fp_cumsum = np.cumsum(fp, axis=1).astype(float)
     recall_cumsum = tp_cumsum / npos
 
     precision_cumsum = tp_cumsum / (tp_cumsum + fp_cumsum)
@@ -613,7 +635,7 @@ def average_recall_vs_avg_nr_proposals(ground_truth, proposals,
             # Find proposals that satisfies minimum tiou threshold.
             true_positives_tiou = score >= tiou
             # Get number of proposals as a percentage of total retrieved.
-            pcn_proposals = np.minimum((score.shape[1] * pcn_lst).astype(np.int), score.shape[1])
+            pcn_proposals = np.minimum((score.shape[1] * pcn_lst).astype(int), score.shape[1])
 
             for j, nr_proposals in enumerate(pcn_proposals):
                 # Compute the number of matches for each percentage of the proposals

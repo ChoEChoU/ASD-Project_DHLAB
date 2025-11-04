@@ -79,7 +79,7 @@ ASD-Project_DHLAB
 │   ├── 18_inference.py           # 최종 ML inference
 │   └── run.sh                    # ML 실험 자동 실행
 │
-├── outputs/                      # CASE 원본 결과 저장
+├── outputs/                      # CASE 원본 결과 / Weights 저장
 │
 ├── outputs_csv/                  # outputs/ 에서 CSV만 추출된 폴더
 ├── outputs_csv_summaries/        # fold별 결과 요약 저장

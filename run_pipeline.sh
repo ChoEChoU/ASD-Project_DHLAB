@@ -155,8 +155,8 @@ echo "✅ Preprocessing completed (Steps 1~10)."
 # bash model/CASE/11_run_2025_aiai_AF_group_match_E_cell_all_matching.sh
 
 # # 12) CASE 모델 inference-only 실행 (테스트셋)
-# step 12 "CASE inference_only"
-# bash model/CASE/12_run_2025_aiai_AF_group_match_E_cell_all_test_matching.sh
+step 12 "CASE inference_only"
+bash model/CASE/12_run_2025_aiai_AF_group_match_E_cell_all_test_matching.sh
 
 # 13) outputs/ 아래에서 CSV 파일만 추출 (폴더 구조 유지)
 #     출력: outputs_csv/
